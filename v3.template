@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  SNS Notifications for S3 events and CloudWatch Rules
+Parameters:
+  stage:
+    Default: dev
+    Type: String
+    Description: Stage Name
+  
+  bucketName:
+    Default: data
+    Type: String
+    Description: Consumable bucket name prefix
+  
+  projectName:
+    Default: s3-notification-example
+    Type: String
+    Description: Project Name SSM Parameter
+  
+  sqsNotificationsArns:
+    Default: None,None
+    Type: CommaDelimitedList
+    Description: Comma delimited list of SQS ARNs to subscribe to SNS Topic (up to 2)
+
+  lambdaNotificationsArns:
+    Default: None,None
+    Type: CommaDelimitedList
+    Description: Comma delimited list of SQS ARNs to subscribe to SNS Topic (up to 2)
+
+Conditions:
+  sqs1NotificationsArnsProvided:
+    !Not [!Equals [ !Select [ "0", !Ref sqsNotificationsArns], "None"]] 
+  sqs2NotificationsArnsProvided:
+    !Not [!Equals [ !Select [ "1", !Ref sqsNotificationsArns], "None"]]
+  
+  lambda1NotificationsArnsProvided:
+    !Not [!Equals [ !Select [ "0", !Ref lambdaNotificationsArns], "None"]]
+  lambda2NotificationsArnsProvided:
+    !Not [!Equals [ !Select [ "1", !Ref lambdaNotificationsArns], "None"]]
+  
+  enableNotifications:
+    !Or 
+      - Condition: sqs1NotificationsArnsProvided 
+      - Condition: sqs2NotificationsArnsProvided
+      - Condition: lambda1NotificationsArnsProvided
+      - Condition: lambda2NotificationsArnsProvided
+
+Resources:
+  s3Bucket:
+    Type:  AWS::S3::Bucket
+    DependsOn:
+      - notificationTopicPolicy
+    Properties:
+      BucketName: !Sub ${projectName}-${bucketName}-${stage}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        !If
+          - enableNotifications
+          - TopicConfigurations:
+              -  
+                Event: s3:ObjectCreated:*
+                Filter:
+                  S3Key: 
+                    Rules:
+                      - Name: suffix
+                        Value: .json
+                Topic: !Ref notificationTopic
+              -  
+                Event: s3:ObjectRemoved:*
+                Filter:
+                  S3Key: 
+                    Rules:
+                      - Name: suffix
+                        Value: .json
+                Topic: !Ref notificationTopic
+          - !Ref AWS::NoValue
+      Tags: 
+        - Key: Project
+          Value: !Ref projectName
+        - Key: Stage
+          Value: !Ref stage
+
+  notificationTopic:
+    Type: AWS::SNS::Topic
+    Condition: enableNotifications
+    Properties: 
+      DisplayName: !Sub ${projectName}-notifications-${stage}
+      Tags: 
+        - Key: Project
+          Value: !Ref projectName
+        - Key: Stage
+          Value: !Ref stage
+      TopicName: !Sub ${projectName}-notifications-${stage}
+  
+  notificationTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Condition: enableNotifications
+    Properties: 
+      PolicyDocument:
+        Version: '2012-10-17'
+        Id: Policy
+        Statement:
+        - Sid: Default
+          Effect: Allow
+          Principal:
+            AWS: "*"
+          Action:
+            - SNS:GetTopicAttributes
+            - SNS:SetTopicAttributes
+            - SNS:AddPermission
+            - SNS:RemovePermission
+            - SNS:DeleteTopic
+            - SNS:Subscribe
+            - SNS:ListSubscriptionsByTopic
+            - SNS:Publish
+            - SNS:Receive
+          Resource: !Ref notificationTopic
+          Condition:
+            StringEquals:
+              AWS:SourceOwner: !Ref AWS::AccountId
+        - Sid: CloudWatchEvents
+          Effect: Allow
+          Principal:
+            Service: events.amazonaws.com
+          Action: sns:Publish
+          Resource: !Ref notificationTopic
+        - Sid: S3
+          Effect: Allow
+          Principal:
+            AWS: "*"
+          Action:
+            - sns:Publish
+          Resource: !Ref notificationTopic
+          Condition:
+            ArnLike: 
+              aws:SourceArn: !Sub arn:aws:s3:*:*:${projectName}-${bucketName}-${stage}
+            StringEquals:
+              aws:SourceAccount: !Ref AWS::AccountId
+      Topics: 
+        - !Ref notificationTopic
