@@ -20,6 +20,8 @@ Parameters:
 Resources:
   s3Bucket:
     Type:  AWS::S3::Bucket
+    DependsOn:
+      - notificationTopicPolicy
     Properties:
       BucketName: !Sub ${projectName}-${bucketName}-${stage}
       PublicAccessBlockConfiguration:
@@ -102,7 +104,7 @@ Resources:
           Resource: !Ref notificationTopic
           Condition:
             ArnLike: 
-              aws:SourceArn: !GetAtt s3Bucket.Arn
+              aws:SourceArn: !Sub arn:aws:s3:*:*:${projectName}-${bucketName}-${stage}
             StringEquals:
               aws:SourceAccount: !Ref AWS::AccountId
       Topics: 
